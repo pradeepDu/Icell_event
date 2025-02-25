@@ -2,22 +2,9 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
-import { AuthProvider, useAuth } from './context/AuthContext';
-
-interface ProtectedRouteProps {
-  children: React.ReactNode;
-}
-
-// Protected route component
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { currentUser, isAdmin } = useAuth();
-  
-  if (!currentUser || !isAdmin) {
-    return <Navigate to="/login" />;
-  }
-  
-  return <>{children}</>;
-};
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute.tsx';
+import Unauthorized from './components/Unauthorized';
 
 const App: React.FC = () => {
   return (
@@ -33,11 +20,28 @@ const App: React.FC = () => {
               </ProtectedRoute>
             } 
           />
-          <Route path="*" element={<Navigate to="/login" />} />
+          <Route 
+            path="/admin" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/student" 
+            element={
+              <ProtectedRoute requiredRole="student">
+                <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route path="/unauthorized" element={<Unauthorized />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Router>
     </AuthProvider>
   );
-}
+};
 
 export default App;

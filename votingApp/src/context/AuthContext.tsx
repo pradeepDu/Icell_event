@@ -3,14 +3,14 @@ import { initializeApp } from 'firebase/app';
 import {
   getAuth,
   signInWithEmailAndPassword,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
   User,
   UserCredential
 } from 'firebase/auth';
+import { useNavigate } from 'react-router-dom';
 
 // Firebase configuration using Vite environment variables
 const firebaseConfig = {
@@ -31,14 +31,27 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
+googleProvider.setCustomParameters({ 
+  prompt: 'select_account',
+  // Restrict to @student.mes.ac.in domain
+  hd: 'student.mes.ac.in'
+});
+
+interface AdminUser {
+  email: string;
+  role: 'admin';
+}
+
+type AuthUser = User | AdminUser | null;
+
 interface AuthContextType {
-  currentUser: User | null;
+  currentUser: AuthUser;
   isAdmin: boolean;
   isStudent: boolean;
+  loading: boolean;
   loginAdmin: (email: string, password: string) => Promise<void>;
   loginStudent: (email: string, password: string) => Promise<UserCredential>;
-  loginWithRedirect: () => Promise<void>;
-  checkRedirectResult: () => Promise<UserCredential | null>;
+  loginWithGoogle: () => Promise<UserCredential>;
   logout: () => Promise<void>;
 }
 
@@ -57,146 +70,105 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [isStudent, setIsStudent] = useState<boolean>(false);
+  const [error, setError] = useState<string>('');
   
-  // Admin login (traditional email/password check against env variables)
   async function loginAdmin(email: string, password: string): Promise<void> {
-    try {
-      // Check if credentials match the admin credentials from .env
-      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-        // Set admin status without using Firebase auth
-        setIsAdmin(true);
-        setIsStudent(false);
-        setCurrentUser(null); // Clear any existing Firebase user
-        setLoading(false);
-      } else if (email === ADMIN_EMAIL) {
-        throw new Error("Incorrect admin password");
-      } else {
-        throw new Error("Not an admin account");
-      }
-    } catch (error) {
-      console.error("Admin login error:", error);
-      throw error;
+    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      // Create a simple admin user object
+      const adminUser: AdminUser = {
+        email: email,
+        role: 'admin'
+      };
+      
+      setCurrentUser(adminUser);
+      setIsAdmin(true);
+      setIsStudent(false);
+    } else {
+      throw new Error("Invalid admin credentials");
     }
   }
   
-  // Student login (using Firebase auth with email/password)
   async function loginStudent(email: string, password: string): Promise<UserCredential> {
-    try {
-      // Validate the email domain for students
-      if (!email.endsWith('@student.mes.ac.in')) {
-        throw new Error("Please use a valid student email (@student.mes.ac.in)");
-      }
-      
-      // Proceed with Firebase authentication for students
-      const result = await signInWithEmailAndPassword(auth, email, password);
-      setIsAdmin(false); // Ensure they're not marked as admin
-      setIsStudent(true);
-      return result;
-    } catch (error) {
-      console.error("Student login error:", error);
-      throw error;
+    if (!email.endsWith('@student.mes.ac.in')) {
+      throw new Error("Invalid student email domain");
     }
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    setIsAdmin(false);
+    setIsStudent(true);
+    return result;
   }
   
-  // Student login with Google redirect instead of popup
-  async function loginWithRedirect(): Promise<void> {
+  async function loginWithGoogle(): Promise<UserCredential> {
     try {
-      // Add a hint to use the student domain
-      googleProvider.setCustomParameters({
-        'login_hint': '@student.mes.ac.in'
-      });
+      const result = await signInWithPopup(auth, googleProvider);
+      console.log("Popup auth result:", result);
       
-      // Use redirect instead of popup
-      return signInWithRedirect(auth, googleProvider);
-    } catch (error) {
-      console.error("Google redirect error:", error);
-      throw error;
-    }
-  }
-  
-  // Check for redirect result when the page loads
-  async function checkRedirectResult(): Promise<UserCredential | null> {
-    try {
-      const result = await getRedirectResult(auth);
-      
-      if (result) {
-        // Verify student email domain after Google sign-in
-        const user = result.user;
-        if (!user.email || !user.email.endsWith('@student.mes.ac.in')) {
-          // If not a student email, log them out and throw error
-          await signOut(auth);
-          throw new Error("Please use a valid student email (@student.mes.ac.in)");
-        }
-        
-        setIsAdmin(false);
+      if (result.user.email?.endsWith('@student.mes.ac.in')) {
+        setCurrentUser(result.user);
         setIsStudent(true);
+        setIsAdmin(false);
         return result;
+      } else {
+        await signOut(auth);
+        throw new Error("Only @student.mes.ac.in emails are allowed");
       }
-      
-      return null;
     } catch (error) {
-      console.error("Redirect result error:", error);
+      console.error("Popup auth error:", error);
       throw error;
     }
   }
   
   async function logout(): Promise<void> {
-    if (isAdmin) {
-      // For admin logout, just reset the state
-      setIsAdmin(false);
-      return Promise.resolve();
-    } else {
-      // For Firebase users, use the Firebase signOut method
-      setIsAdmin(false);
-      setIsStudent(false);
-      return signOut(auth);
-    }
+    setCurrentUser(null);
+    setIsAdmin(false);
+    setIsStudent(false);
+    return signOut(auth);
   }
   
   useEffect(() => {
-    // Only listen for Firebase auth state changes for non-admin users
+    // First, set up the auth state listener
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (!isAdmin) {  // Don't override admin status if admin is logged in
+      console.log("Auth state changed, user:", user);
+      if (user) {
         setCurrentUser(user);
-        
-        // Check if the user is a student based on email domain
-        if (user && user.email && user.email.endsWith('@student.mes.ac.in')) {
-          setIsStudent(true);
-        } else {
-          setIsStudent(false);
-        }
-        
+        // Check if the user is a student based on email
+        const isStudentEmail = user.email?.endsWith('@student.mes.ac.in') || false;
+        console.log("Is student email:", isStudentEmail);
+        setIsStudent(isStudentEmail);
         setIsAdmin(false);
+      } else if (!isAdmin) {
+        // Only reset if not admin
+        setCurrentUser(null);
+        setIsStudent(false);
       }
       setLoading(false);
-    });
-    
-    // Check for redirect result when the component mounts
-    checkRedirectResult().catch(error => {
-      console.error("Error checking redirect result:", error);
     });
     
     return unsubscribe;
   }, [isAdmin]);
   
-  const value: AuthContextType = {
+  const contextValue: AuthContextType = {
     currentUser,
     isAdmin,
     isStudent,
+    loading,
     loginAdmin,
     loginStudent,
-    loginWithRedirect,
-    checkRedirectResult,
-    logout,
+    loginWithGoogle,
+    logout
   };
   
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={contextValue}>
       {!loading && children}
     </AuthContext.Provider>
   );
+}
+
+function setError(arg0: string) {
+  throw new Error('Function not implemented.');
 }
