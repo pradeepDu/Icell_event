@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, JSX } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -10,7 +10,6 @@ import {
   User,
   UserCredential
 } from 'firebase/auth';
-import { useNavigate } from 'react-router-dom';
 
 // Firebase configuration using Vite environment variables
 const firebaseConfig = {
@@ -69,26 +68,36 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
-export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
+export function AuthProvider({ children }: AuthProviderProps) {
   const [currentUser, setCurrentUser] = useState<AuthUser>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [isStudent, setIsStudent] = useState<boolean>(false);
-  const [error, setError] = useState<string>('');
+  
+  // Fix: Added proper error handling function
   
   async function loginAdmin(email: string, password: string): Promise<void> {
-    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-      // Create a simple admin user object
-      const adminUser: AdminUser = {
-        email: email,
-        role: 'admin'
-      };
+    try {
+      console.log("Attempting admin login with:", email);
       
-      setCurrentUser(adminUser);
-      setIsAdmin(true);
-      setIsStudent(false);
-    } else {
-      throw new Error("Invalid admin credentials");
+      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+        // Create a simple admin user object
+        const adminUser: AdminUser = {
+          email: email,
+          role: 'admin'
+        };
+        
+        console.log("Admin login successful");
+        setCurrentUser(adminUser);
+        setIsAdmin(true);
+        setIsStudent(false);
+      } else {
+        console.log("Invalid admin credentials");
+        throw new Error("Invalid admin credentials");
+      }
+    } catch (error) {
+      console.error("Admin login error:", error);
+      throw error;
     }
   }
   
@@ -132,24 +141,28 @@ export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
   useEffect(() => {
     // First, set up the auth state listener
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      console.log("Auth state changed, user:", user);
+      //console.log("Auth state changed, user:", user);
+      
       if (user) {
-        setCurrentUser(user);
         // Check if the user is a student based on email
         const isStudentEmail = user.email?.endsWith('@student.mes.ac.in') || false;
-        console.log("Is student email:", isStudentEmail);
-        setIsStudent(isStudentEmail);
-        setIsAdmin(false);
+        
+        // Only update if the user is not already set as admin
+        if (!isAdmin) {
+          setCurrentUser(user);
+          setIsStudent(isStudentEmail);
+        }
       } else if (!isAdmin) {
         // Only reset if not admin
         setCurrentUser(null);
         setIsStudent(false);
       }
+      
       setLoading(false);
     });
     
     return unsubscribe;
-  }, [isAdmin]);
+  }, [isAdmin]); // Keep the dependency on isAdmin
   
   const contextValue: AuthContextType = {
     currentUser,
@@ -167,8 +180,4 @@ export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
       {!loading && children}
     </AuthContext.Provider>
   );
-}
-
-function setError(arg0: string) {
-  throw new Error('Function not implemented.');
 }

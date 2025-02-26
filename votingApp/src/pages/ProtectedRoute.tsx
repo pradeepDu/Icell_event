@@ -11,9 +11,9 @@ interface ProtectedRouteProps {
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
     const { currentUser, isAdmin, isStudent, loading } = useAuth();
     
-    console.log("Protected Route - currentUser:", currentUser);
-    console.log("Protected Route - isAdmin:", isAdmin);
-    console.log("Protected Route - isStudent:", isStudent);
+    //console.log("Protected Route - currentUser:", currentUser);
+    //console.log("Protected Route - isAdmin:", isAdmin);
+   // console.log("Protected Route - isStudent:", isStudent);
     
     if (loading) {
       return <div>Loading...</div>;
