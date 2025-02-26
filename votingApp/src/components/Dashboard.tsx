@@ -19,10 +19,67 @@ interface Team {
   votedBy: string[]; // Array of user IDs who voted for this team
 }
 
+// User session management
+const useSessionStorage = <T,>(key: string, initialValue: T) => {
+  // Use sessionStorage instead of localStorage to keep state separate between tabs
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    try {
+      const item = sessionStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(error);
+      return initialValue;
+    }
+  });
+
+  const setValue = (value: T | ((val: T) => T)) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      sessionStorage.setItem(key, JSON.stringify(valueToStore));
+      
+      // Also update localStorage for data persistence between sessions
+      // and to allow communication between tabs
+      localStorage.setItem(key, JSON.stringify(valueToStore));
+      
+      // Dispatch a custom event to notify other tabs of the change
+      window.dispatchEvent(new CustomEvent('storage-update', { detail: { key, value: valueToStore } }));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // Listen for updates from other tabs/windows
+  useEffect(() => {
+    const handleStorageUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail && customEvent.detail.key === key) {
+        setStoredValue(customEvent.detail.value);
+      }
+    };
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === key && event.newValue) {
+        setStoredValue(JSON.parse(event.newValue));
+      }
+    };
+
+    window.addEventListener('storage-update', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageChange);
+    
+    return () => {
+      window.removeEventListener('storage-update', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [key]);
+
+  return [storedValue, setValue] as const;
+};
+
 // Admin-only component
 const AdminPanel: React.FC = () => {
   const [students, setStudents] = useState<any[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
+  const [teams, setTeams] = useSessionStorage<Team[]>('teams', []);
   const [showTeamModal, setShowTeamModal] = useState(false);
   const { currentUser } = useAuth();
   
@@ -40,11 +97,6 @@ const AdminPanel: React.FC = () => {
       setTeams(JSON.parse(savedTeams));
     }
   }, []);
-
-  // Save teams to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('teams', JSON.stringify(teams));
-  }, [teams]);
   
   // Team modal component
   const TeamModal: React.FC = () => {
@@ -300,9 +352,10 @@ const StudentDashboard: React.FC = () => {
 
 // Shared component for team voting
 const TeamVoting: React.FC = () => {
-  const [teams, setTeams] = useState<Team[]>([]);
+  const [teams, setTeams] = useSessionStorage<Team[]>('teams', []);
   const { currentUser, isAdmin } = useAuth();
   const userId = currentUser?.email || '';
+  const sessionId = useSessionStorage<string>('sessionId', `${userId}-${Date.now()}`)[0];
   
   useEffect(() => {
     // In a real app, you'd fetch from a database/backend
@@ -310,33 +363,24 @@ const TeamVoting: React.FC = () => {
     if (savedTeams) {
       setTeams(JSON.parse(savedTeams));
     }
-    
-    // Set up a simple polling mechanism to check for updates
-    // In a real app, you'd use websockets or server-sent events
-    const interval = setInterval(() => {
-      const updatedTeams = localStorage.getItem('teams');
-      if (updatedTeams) {
-        setTeams(JSON.parse(updatedTeams));
-      }
-    }, 5000); // Poll every 5 seconds
-    
-    return () => clearInterval(interval);
   }, []);
   
   const handleVote = (teamId: string) => {
     // Don't allow admins to vote
     if (isAdmin) return;
     
+    const userVoteIdentifier = `${userId}-${sessionId}`;
+    
     const updatedTeams = teams.map(team => {
       // Check if user already voted for any team
-      const userVotedForAnyTeam = teams.some(t => t.votedBy.includes(userId));
+      const userVotedForAnyTeam = teams.some(t => t.votedBy.includes(userVoteIdentifier));
       
       // If user already voted for this team, remove the vote
-      if (team.id === teamId && team.votedBy.includes(userId)) {
+      if (team.id === teamId && team.votedBy.includes(userVoteIdentifier)) {
         return {
           ...team,
           votes: team.votes - 1,
-          votedBy: team.votedBy.filter(id => id !== userId)
+          votedBy: team.votedBy.filter(id => id !== userVoteIdentifier)
         };
       } 
       // If user hasn't voted yet and is voting for this team
@@ -344,38 +388,46 @@ const TeamVoting: React.FC = () => {
         return {
           ...team,
           votes: team.votes + 1,
-          votedBy: [...team.votedBy, userId]
+          votedBy: [...team.votedBy, userVoteIdentifier]
         };
       }
       // If user already voted for another team and is changing vote
-      else if (team.id === teamId && !team.votedBy.includes(userId)) {
-        // Remove vote from other team
-        teams.forEach(t => {
-          if (t.votedBy.includes(userId)) {
-            t.votes -= 1;
-            t.votedBy = t.votedBy.filter(id => id !== userId);
+      else if (team.id === teamId && !team.votedBy.includes(userVoteIdentifier)) {
+        // Find and update the team the user previously voted for
+        const updatedTeamsTemp = teams.map(t => {
+          if (t.votedBy.includes(userVoteIdentifier)) {
+            return {
+              ...t,
+              votes: t.votes - 1, 
+              votedBy: t.votedBy.filter(id => id !== userVoteIdentifier)
+            };
           }
+          return t;
         });
+        
+        // Apply those updates
+        setTeams(updatedTeamsTemp);
         
         return {
           ...team,
           votes: team.votes + 1,
-          votedBy: [...team.votedBy, userId]
+          votedBy: [...team.votedBy, userVoteIdentifier]
         };
       }
       return team;
     });
     
     setTeams(updatedTeams);
-    localStorage.setItem('teams', JSON.stringify(updatedTeams));
   };
   
   const hasVoted = (teamId: string) => {
+    const userVoteIdentifier = `${userId}-${sessionId}`;
     const team = teams.find(t => t.id === teamId);
-    return team?.votedBy.includes(userId) || false;
+    return team?.votedBy.includes(userVoteIdentifier) || false;
   };
   
-  const userHasVoted = teams.some(team => team.votedBy.includes(userId));
+  const userVoteIdentifier = `${userId}-${sessionId}`;
+  const userHasVoted = teams.some(team => team.votedBy.includes(userVoteIdentifier));
   
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
@@ -456,6 +508,65 @@ const TeamVoting: React.FC = () => {
     </div>
   );
 };
+
+// Modified AuthContext for secure login sessions
+// This would be defined in context/AuthContext.ts
+/*
+interface AuthContextType {
+  currentUser: { email: string, role: string } | null;
+  isAdmin: boolean;
+  isStudent: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+}
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState<{ email: string, role: string } | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isStudent, setIsStudent] = useState(false);
+  
+  // Create unique session ID to prevent session conflicts
+  useEffect(() => {
+    const storedSession = sessionStorage.getItem('auth-session');
+    if (storedSession) {
+      const parsedSession = JSON.parse(storedSession);
+      setCurrentUser(parsedSession.user);
+      setIsAdmin(parsedSession.user?.role === 'admin');
+      setIsStudent(parsedSession.user?.role === 'student');
+    }
+  }, []);
+  
+  const login = async (email: string, password: string) => {
+    // Backend authentication would happen here
+    // For demo, we'll just set the user based on email
+    let role = 'student';
+    if (email.includes('admin')) {
+      role = 'admin';
+    }
+    
+    const user = { email, role };
+    setCurrentUser(user);
+    setIsAdmin(role === 'admin');
+    setIsStudent(role === 'student');
+    
+    // Save to sessionStorage instead of localStorage
+    sessionStorage.setItem('auth-session', JSON.stringify({ user }));
+  };
+  
+  const logout = async () => {
+    setCurrentUser(null);
+    setIsAdmin(false);
+    setIsStudent(false);
+    sessionStorage.removeItem('auth-session');
+  };
+  
+  return (
+    <AuthContext.Provider value={{ currentUser, isAdmin, isStudent, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+*/
 
 const Dashboard: React.FC = () => {
   const { currentUser, isAdmin, isStudent, logout } = useAuth();
