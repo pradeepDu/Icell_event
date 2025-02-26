@@ -58,7 +58,7 @@ const TeamManager: React.FC<TeamManagerProps> = ({
           teamId: newTeam.toLowerCase().replace(/\s+/g, '-')
         };
         
-        await axios.post('http://localhost:5000/team-members', payload);
+        await axios.post(`${import.meta.env.VITE_BACKEND_URL}/team-members`, payload);
         
         // Add animation for success
         if (cardRef.current) {

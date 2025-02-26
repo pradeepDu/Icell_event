@@ -9,7 +9,7 @@ import axios from 'axios';
 import ProtectedRoute from './pages/ProtectedRoute';
 
 // Set axios defaults
-axios.defaults.baseURL = 'http://localhost:5000';
+axios.defaults.baseURL = `${import.meta.env.VITE_BACKEND_URL}`;
 
 // NavBar component extracted to avoid using hooks outside of AuthProvider
 const NavBar = () => {
