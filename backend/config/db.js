@@ -38,7 +38,7 @@ const connectToDatabase = async () => {
       }
       
       // Connect with timeout
-      await mongoose.connect(process.env.MONGODB_URI, connectionOptions);
+      await mongoose.connect(process.env.MONGO_URI, connectionOptions);
       
       // Setup connection event handlers for serverless environment
       mongoose.connection.on('error', (err) => {
