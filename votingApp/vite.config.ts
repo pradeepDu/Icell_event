@@ -3,5 +3,5 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "./" // or "/" if using a custom domain
+  base: "./" // or "/" 
 });
