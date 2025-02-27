@@ -9,195 +9,219 @@ const router = express.Router();
 
 /**
  * @route POST /votes
- * @desc Cast a vote for a team
+ * @desc Cast a vote for a team - Optimized for serverless
  */
 router.post('/', async (req, res) => {
   try {
-    console.log('Starting vote processing...');
-    await connectToDatabase();
-    console.log('Database connected successfully');
-    
+    // Safe handling of request body
+    if (!req.body) {
+      return res.status(400).json({ error: "Request body is missing" });
+    }
+
     const { userId, teamName } = req.body;
-    console.log('Vote request received:', { userId, teamName });
     
-    // Enhanced validation
+    // Basic validation with early return
     if (!userId || !teamName) {
-      console.log('Missing required fields:', { userId, teamName });
       return res.status(400).json({ error: "UserId and teamName are required" });
     }
     
-    // Type validation
-    if (typeof userId !== 'string' || typeof teamName !== 'string') {
-      console.log('Invalid data types:', { 
-        userIdType: typeof userId, 
-        teamNameType: typeof teamName 
+    // Connect to database with safety catch
+    try {
+      await connectToDatabase();
+    } catch (dbError) {
+      console.error('Database connection failed:', dbError);
+      return res.status(503).json({ 
+        error: "Service temporarily unavailable. Database connection failed.",
+        details: process.env.NODE_ENV === 'development' ? dbError.message : undefined
       });
-      return res.status(400).json({ error: "UserId and teamName must be strings" });
     }
     
-    // Check if the team exists
-    console.log('Checking if team exists:', teamName);
-    const teamExists = await TeamMember.findOne({ teamName });
+    // Check if the team exists with safe error handling
+    let teamExists;
+    try {
+      teamExists = await TeamMember.findOne({ teamName }).lean().exec();
+    } catch (teamError) {
+      console.error('Team lookup error:', teamError);
+      return res.status(500).json({ error: "Failed to verify team" });
+    }
+    
     if (!teamExists) {
-      console.log('Team not found:', teamName);
       return res.status(404).json({ error: "Team not found" });
     }
-    console.log('Team exists:', teamExists.teamName);
     
-    // Check if there is an active voting period
+    // Get current time with safe handling
     const now = new Date();
-    console.log('Current time (UTC):', now.toISOString());
     
-    // First check if any active period exists at all
-    console.log('Checking for any active voting period...');
-    const anyActivePeriod = await VotingPeriod.findOne({ active: true });
-    console.log('Any active period found:', !!anyActivePeriod);
-    
-    if (!anyActivePeriod) {
-      console.log('No active voting period found at all');
-      return res.status(403).json({ error: "No active voting period is available. Please try again later." });
+    // Check for active voting period with safe error handling
+    let activePeriod;
+    try {
+      activePeriod = await VotingPeriod.findOne({ 
+        active: true,
+        endDate: { $gt: now }
+      }).lean().exec();
+    } catch (periodError) {
+      console.error('Voting period lookup error:', periodError);
+      return res.status(500).json({ error: "Failed to check voting period status" });
     }
     
-    // Then check with the end date
-    console.log('Checking for valid active voting period...');
-    const activePeriod = await VotingPeriod.findOne({ 
-      active: true,
-      endDate: { $gt: now }
-    });
-    
-    console.log('Active period check:', {
-      currentTimeUTC: now.toISOString(),
-      foundActivePeriod: !!activePeriod,
-      activePeriodInfo: activePeriod ? {
-        id: activePeriod._id.toString(),
-        name: activePeriod.name,
-        startDate: activePeriod.startDate.toISOString(),
-        endDate: activePeriod.endDate.toISOString(),
-        active: activePeriod.active
-      } : 'None'
-    });
-    
     if (!activePeriod) {
-      // Close any expired voting periods
-      console.log('No valid active period found, updating expired periods...');
-      const updateResult = await VotingPeriod.updateMany(
-        { active: true, endDate: { $lte: now } },
-        { active: false }
-      );
-      
-      console.log('Updated expired periods:', updateResult);
+      // Close any expired voting periods safely
+      try {
+        await VotingPeriod.updateMany(
+          { active: true, endDate: { $lte: now } },
+          { active: false }
+        );
+      } catch (updateError) {
+        // Non-blocking error - log but continue
+        console.error('Failed to update expired periods:', updateError);
+      }
       
       return res.status(403).json({ 
-        error: "The voting period has ended. Please wait for the next voting period to open.",
-        currentTime: now.toISOString()
+        error: "No active voting period available. Please try again later."
       });
     }
     
-    // Check if user has already voted
-    console.log('Checking if user has already voted:', userId);
-    const existingVote = await Vote.findOne({ userId });
-    console.log('Existing vote found:', !!existingVote);
-    
-    if (existingVote) {
-      // Update existing vote
-      console.log('Updating existing vote from', existingVote.teamName, 'to', teamName);
-      existingVote.teamName = teamName;
-      existingVote.votedAt = now;
-      await existingVote.save();
-      console.log('Vote updated successfully');
-      return res.status(200).json({ message: "Vote updated successfully", vote: existingVote });
-    } else {
-      // Create new vote
-      console.log('Creating new vote for team:', teamName);
-      const newVote = new Vote({ userId, teamName, votedAt: now });
-      await newVote.save();
-      console.log('Vote created successfully:', newVote._id.toString());
-      return res.status(201).json({ message: "Vote cast successfully", vote: newVote });
+    // Process vote with safe error handling
+    try {
+      // Check if user has already voted
+      const existingVote = await Vote.findOne({ userId }).lean().exec();
+      
+      if (existingVote) {
+        // Update existing vote
+        await Vote.updateOne(
+          { userId },
+          { $set: { teamName, votedAt: now } }
+        );
+        
+        return res.status(200).json({ 
+          message: "Vote updated successfully",
+          teamName
+        });
+      } else {
+        // Create new vote - use create instead of new+save for better performance
+        const newVote = await Vote.create({ userId, teamName, votedAt: now });
+        
+        return res.status(201).json({ 
+          message: "Vote cast successfully",
+          teamName
+        });
+      }
+    } catch (voteError) {
+      console.error('Vote processing error:', voteError);
+      return res.status(500).json({ error: "Failed to process vote" });
     }
   } catch (error) {
-    console.error('Vote processing error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-      code: error.code
-    });
-    logError('/votes POST', error);
-    res.status(500).json({ 
-      error: "Failed to process vote. Please try again.",
-      message: error.message
-    });
+    // Top-level catch for any unexpected errors
+    console.error('Unhandled error in vote processing:', error);
+    // Send a generic error response to avoid crashing
+    return res.status(500).json({ error: "An unexpected error occurred" });
   }
 });
 
 /**
  * @route GET /votes/count
- * @desc Get vote counts for all teams
+ * @desc Get vote counts for all teams - Serverless optimized
  */
 router.get('/count', async (req, res) => {
   try {
-    console.log('Retrieving vote counts...');
-    await connectToDatabase();
-    const voteCounts = await Vote.aggregate([
-      { $group: { _id: "$teamName", count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]);
+    try {
+      await connectToDatabase();
+    } catch (dbError) {
+      console.error('Database connection failed:', dbError);
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
     
-    // Format the response
-    const result = voteCounts.map(item => ({
-      teamName: item._id,
-      votes: item.count
-    }));
-    
-    console.log('Vote counts retrieved successfully:', result);
-    res.status(200).json(result);
+    try {
+      const voteCounts = await Vote.aggregate([
+        { $group: { _id: "$teamName", count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]);
+      
+      const result = voteCounts.map(item => ({
+        teamName: item._id,
+        votes: item.count
+      }));
+      
+      return res.status(200).json(result);
+    } catch (countError) {
+      console.error('Vote count error:', countError);
+      return res.status(500).json({ error: "Failed to retrieve vote counts" });
+    }
   } catch (error) {
-    console.error('Error retrieving vote counts:', error);
-    logError('/votes/count GET', error);
-    res.status(500).json({ error: "Failed to retrieve vote counts" });
+    console.error('Unhandled error in vote count:', error);
+    return res.status(500).json({ error: "An unexpected error occurred" });
   }
 });
 
 /**
  * @route GET /votes/user/:userId
- * @desc Get the vote of a specific user
+ * @desc Get a user's vote - Serverless optimized
  */
 router.get('/user/:userId', async (req, res) => {
   try {
-    console.log('Retrieving vote for user:', req.params.userId);
-    await connectToDatabase();
-    const vote = await Vote.findOne({ userId: req.params.userId });
-    if (!vote) {
-      console.log('No vote found for user:', req.params.userId);
-      return res.status(404).json({ message: "User has not voted yet" });
+    const userId = req.params.userId;
+    
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
     }
-    console.log('Vote found:', vote);
-    res.status(200).json(vote);
+    
+    try {
+      await connectToDatabase();
+    } catch (dbError) {
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+    
+    try {
+      const vote = await Vote.findOne({ userId }).lean().exec();
+      
+      if (!vote) {
+        return res.status(404).json({ message: "User has not voted yet" });
+      }
+      
+      return res.status(200).json(vote);
+    } catch (lookupError) {
+      console.error('Vote lookup error:', lookupError);
+      return res.status(500).json({ error: "Failed to retrieve vote" });
+    }
   } catch (error) {
-    console.error('Error retrieving user vote:', error);
-    logError(`/votes/user/${req.params.userId} GET`, error);
-    res.status(500).json({ error: "Failed to retrieve vote information" });
+    console.error('Unhandled error in user vote lookup:', error);
+    return res.status(500).json({ error: "An unexpected error occurred" });
   }
 });
 
 /**
  * @route DELETE /votes/:userId
- * @desc Remove a user's vote
+ * @desc Remove a user's vote - Serverless optimized
  */
 router.delete('/:userId', async (req, res) => {
   try {
-    console.log('Deleting vote for user:', req.params.userId);
-    await connectToDatabase();
-    const result = await Vote.findOneAndDelete({ userId: req.params.userId });
-    if (!result) {
-      console.log('No vote found to delete for user:', req.params.userId);
-      return res.status(404).json({ message: "Vote not found" });
+    const userId = req.params.userId;
+    
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
     }
-    console.log('Vote deleted successfully');
-    res.status(200).json({ message: "Vote removed successfully" });
+    
+    try {
+      await connectToDatabase();
+    } catch (dbError) {
+      return res.status(503).json({ error: "Service temporarily unavailable" });
+    }
+    
+    try {
+      const result = await Vote.deleteOne({ userId });
+      
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ message: "Vote not found" });
+      }
+      
+      return res.status(200).json({ message: "Vote removed successfully" });
+    } catch (deleteError) {
+      console.error('Vote deletion error:', deleteError);
+      return res.status(500).json({ error: "Failed to remove vote" });
+    }
   } catch (error) {
-    console.error('Error deleting vote:', error);
-    logError(`/votes/${req.params.userId} DELETE`, error);
-    res.status(500).json({ error: "Failed to remove vote" });
+    console.error('Unhandled error in vote deletion:', error);
+    return res.status(500).json({ error: "An unexpected error occurred" });
   }
 });
 

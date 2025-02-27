@@ -1,48 +1,75 @@
 const mongoose = require('mongoose');
 
+// Connection options
+const connectionOptions = {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000, // Timeout after 5 seconds instead of 30
+  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+  family: 4 // Use IPv4, skip trying IPv6
+};
+
+// Track connection state
+let isConnecting = false;
+let connectionPromise = null;
+
 /**
- * Connects to the MongoDB database
- * Enhanced with better error handling and logging
+ * Connects to MongoDB with serverless optimizations
  */
 const connectToDatabase = async () => {
-  try {
-    // Check if already connected
-    if (mongoose.connection.readyState === 1) {
-      console.log('Already connected to MongoDB');
-      return;
-    }
-    
-    if (!process.env.MONGODB_URI) {
-      console.error('MONGODB_URI environment variable is not defined');
-      throw new Error('MONGODB_URI environment variable is not defined');
-    }
-    
-    console.log('Connecting to MongoDB...');
-    await mongoose.connect(process.env.MONGODB_URI, {
-      // These options are no longer needed in newer mongoose versions, but keeping them for compatibility
-      // If you're using Mongoose 6+, these are automatically set to true
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    
-    console.log('Successfully connected to MongoDB');
-  } catch (error) {
-    console.error('MongoDB connection error:', {
-      message: error.message,
-      stack: error.stack,
-      code: error.code,
-      name: error.name
-    });
-    
-    // Handle specific MongoDB connection errors
-    if (error.name === 'MongoNetworkError') {
-      console.error('Network error connecting to MongoDB. Check your connection and MongoDB URI.');
-    } else if (error.name === 'MongoServerSelectionError') {
-      console.error('Could not select MongoDB server. The server may be down or the URI may be incorrect.');
-    }
-    
-    throw error; // Re-throw to be caught by the route handler
+  // Return existing connection if already connected
+  if (mongoose.connection.readyState === 1) {
+    return Promise.resolve();
   }
+  
+  // Return existing connection attempt if in progress
+  if (isConnecting && connectionPromise) {
+    return connectionPromise;
+  }
+  
+  // Start new connection
+  isConnecting = true;
+  
+  connectionPromise = new Promise(async (resolve, reject) => {
+    try {
+      // Verify environment variables
+      if (!process.env.MONGO_URI) {
+        throw new Error('MONGO_URI environment variable is not defined');
+      }
+      
+      // Connect with timeout
+      await mongoose.connect(process.env.MONGODB_URI, connectionOptions);
+      
+      // Setup connection event handlers for serverless environment
+      mongoose.connection.on('error', (err) => {
+        console.error('MongoDB connection error:', err);
+        // In serverless, we don't want to crash the function on connection errors
+        // Just log them and let the next invocation try again
+      });
+      
+      mongoose.connection.on('disconnected', () => {
+        console.log('MongoDB disconnected');
+        // Reset connection state for next serverless invocation
+        isConnecting = false;
+        connectionPromise = null;
+      });
+      
+      resolve();
+    } catch (error) {
+      isConnecting = false;
+      connectionPromise = null;
+      
+      console.error('MongoDB connection failed:', {
+        message: error.message,
+        code: error.code,
+        name: error.name
+      });
+      
+      reject(error);
+    }
+  });
+  
+  return connectionPromise;
 };
 
 module.exports = { connectToDatabase };
