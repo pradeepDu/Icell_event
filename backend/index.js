@@ -21,6 +21,18 @@ connectToDatabase().catch(err => {
   console.error("Initial database connection failed:", err.message);
   process.exit(1); // Exit on initial connection failure
 });
+app.get('/', (req, res) => {
+  res.status(200).json({ 
+    message: 'API is running',
+    version: '1.0.0',
+    endpoints: [
+      '/team-members',
+      '/votes',
+      '/voting-period'
+    ]
+  });
+});
+
 
 // Routes
 app.use('/team-members', teamMembersRoutes);
