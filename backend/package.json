@@ -3,10 +3,14 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "mongoose": "^8.10.2"
-    
+    "mongoose": "^8.10.2",
+    "whatwg-url": "^11.0.0",
+    "webidl-conversions": "^7.0.0"
   },
-  "scripts":{ 
+  "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }

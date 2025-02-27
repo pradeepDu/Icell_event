@@ -8,11 +8,13 @@ async function connectToDatabase() {
   }
   
   try {
-    if (!process.env.MONGO_URI) {
-      throw new Error("MONGO_URI environment variable is not defined");
+    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
+    
+    if (!mongoUri) {
+      throw new Error("MongoDB connection URI is not defined in environment variables");
     }
     
-    const connection = await mongoose.connect(process.env.MONGO_URI, {
+    const connection = await mongoose.connect(mongoUri, {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
       family: 4
@@ -27,7 +29,15 @@ async function connectToDatabase() {
       uri: process.env.MONGO_URI ? "URI is defined" : "URI is missing",
       mongooseVersion: mongoose.version
     });
-    throw err;
+    
+    // Don't rethrow in production serverless environment
+    if (process.env.NODE_ENV !== 'production') {
+      throw err;
+    } else {
+      // Log but don't crash the serverless function
+      console.error("Continuing without database connection");
+      return null;
+    }
   }
 }
 
