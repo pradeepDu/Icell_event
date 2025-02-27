@@ -11,10 +11,13 @@ const router = express.Router();
  * @route POST /votes
  * @desc Cast a vote for a team
  */
+// In your /routes/votes.js file - update the POST route
 router.post('/', async (req, res) => {
   try {
     await connectToDatabase();
     const { userId, teamName } = req.body;
+    
+    console.log('Vote request received:', { userId, teamName });
     
     if (!userId || !teamName) {
       return res.status(400).json({ error: "UserId and teamName are required" });
@@ -28,18 +31,43 @@ router.post('/', async (req, res) => {
     
     // Check if there is an active voting period
     const now = new Date();
+    
+    // First check if any active period exists at all
+    const anyActivePeriod = await VotingPeriod.findOne({ active: true });
+    if (!anyActivePeriod) {
+      console.log('No active voting period found at all');
+      return res.status(403).json({ error: "No active voting period is available. Please try again later." });
+    }
+    
+    // Then check with the end date
     const activePeriod = await VotingPeriod.findOne({ 
       active: true,
       endDate: { $gt: now }
     });
     
+    console.log('Active period check:', {
+      currentTimeUTC: now.toISOString(),
+      foundActivePeriod: !!activePeriod,
+      activePeriodInfo: activePeriod ? {
+        name: activePeriod.name,
+        startDate: activePeriod.startDate.toISOString(),
+        endDate: activePeriod.endDate.toISOString()
+      } : 'None'
+    });
+    
     if (!activePeriod) {
       // Close any expired voting periods
-      await VotingPeriod.updateMany(
+      const updateResult = await VotingPeriod.updateMany(
         { active: true, endDate: { $lte: now } },
         { active: false }
       );
-      return res.status(403).json({ error: "No active voting period is currently available" });
+      
+      console.log('Updated expired periods:', updateResult);
+      
+      return res.status(403).json({ 
+        error: "The voting period has ended. Please wait for the next voting period to open.",
+        currentTime: now.toISOString()
+      });
     }
     
     // Check if user has already voted
@@ -58,6 +86,7 @@ router.post('/', async (req, res) => {
       return res.status(201).json({ message: "Vote cast successfully", vote: newVote });
     }
   } catch (error) {
+    console.error('Vote processing error:', error);
     logError('/votes POST', error);
     res.status(500).json({ error: "Failed to process vote. Please try again." });
   }

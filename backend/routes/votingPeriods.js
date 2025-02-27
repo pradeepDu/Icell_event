@@ -10,6 +10,7 @@ const router = express.Router();
  * @route POST /voting-period
  * @desc Create a new voting period and reset all votes
  */
+// In your /routes/votingPeriods.js file
 router.post('/', async (req, res) => {
   try {
     await connectToDatabase();
@@ -19,8 +20,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: "End date is required" });
     }
     
+    // Force UTC handling for consistent time comparison
     const now = new Date();
     const periodEndDate = new Date(endDate);
+    
+    console.log('Creating voting period:', {
+      nowUTC: now.toISOString(),
+      endDateUTC: periodEndDate.toISOString()
+    });
     
     if (periodEndDate <= now) {
       return res.status(400).json({ error: "End date must be in the future" });
@@ -32,10 +39,11 @@ router.post('/', async (req, res) => {
     // Reset all votes by deleting them
     await Vote.deleteMany({});
     
-    // Create new voting period with explicit UTC dates
+    // Create new voting period
     const newPeriod = new VotingPeriod({
       startDate: startDate ? new Date(startDate) : now,
       endDate: periodEndDate,
+      active: true, // Make sure to set this explicitly
       name: name || `Voting Period ${now.toISOString().split('T')[0]}`
     });
     
@@ -98,6 +106,7 @@ router.get('/history', async (req, res) => {
     res.status(500).json({ error: "Failed to retrieve voting period history" });
   }
 });
+
 
 module.exports = router;
 
